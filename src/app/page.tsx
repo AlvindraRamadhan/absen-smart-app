@@ -1,246 +1,299 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { motion } from "framer-motion";
-import { Clock, Calendar, MapPin, Users } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import React, { useState } from "react";
+import { Header } from "@/components/layout/header";
+import { HeroSection } from "@/components/sections/hero-section";
+import { AttendanceCard } from "@/components/attendance/attendance-card";
 
 export default function HomePage() {
-  const [currentTime, setCurrentTime] = useState<string>("");
-  const [currentDate, setCurrentDate] = useState<string>("");
-  const [mounted, setMounted] = useState(false);
+  const [attendanceStatus, setAttendanceStatus] = useState<
+    "not_checked_in" | "checked_in" | "checked_out"
+  >("not_checked_in");
+  const [cardStatus, setCardStatus] = useState<
+    "idle" | "checking_location" | "ready" | "processing" | "success" | "error"
+  >("idle");
+  const [userLocation, setUserLocation] = useState<
+    { latitude: number; longitude: number; accuracy: number } | undefined
+  >();
+  const [isWithinRadius, setIsWithinRadius] = useState(false);
+  const [distance, setDistance] = useState<number>();
 
-  useEffect(() => {
-    setMounted(true);
-
-    const updateTime = () => {
-      const now = new Date();
-      setCurrentTime(
-        now.toLocaleTimeString("id-ID", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })
-      );
-      setCurrentDate(
-        now.toLocaleDateString("id-ID", {
-          weekday: "long",
-          year: "numeric",
-          month: "long",
-          day: "numeric",
-        })
-      );
-    };
-
-    updateTime();
-    const timer = setInterval(updateTime, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour < 12) return "Selamat Pagi";
-    if (hour < 17) return "Selamat Siang";
-    return "Selamat Malam";
+  // Mock office location (Jakarta area)
+  const officeLocation = {
+    latitude: -6.2088,
+    longitude: 106.8456,
+    radius: 100, // 100 meters
   };
 
-  if (!mounted) {
-    return (
-      <main className="min-h-screen bg-gradient-to-br from-slate-50 to-gray-100 flex items-center justify-center">
-        <div className="animate-pulse text-gray-400">Loading...</div>
-      </main>
-    );
-  }
+  // Mock working hours
+  const workingHours = {
+    start: "09:00",
+    end: "17:00",
+    lateThreshold: "09:15",
+  };
+
+  const calculateDistance = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ) => {
+    const R = 6371e3; // Earth's radius in meters
+    const φ1 = (lat1 * Math.PI) / 180;
+    const φ2 = (lat2 * Math.PI) / 180;
+    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  };
+
+  const handleGetLocation = async () => {
+    setCardStatus("checking_location");
+
+    try {
+      if (!navigator.geolocation) {
+        throw new Error("Geolocation is not supported by this browser.");
+      }
+
+      const position = await new Promise<GeolocationPosition>(
+        (resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 60000,
+          });
+        }
+      );
+
+      const location = {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      };
+
+      setUserLocation(location);
+
+      // Calculate distance from office
+      const dist = calculateDistance(
+        location.latitude,
+        location.longitude,
+        officeLocation.latitude,
+        officeLocation.longitude
+      );
+      setDistance(dist);
+
+      // Check if within radius
+      const withinRadius = dist <= officeLocation.radius;
+      setIsWithinRadius(withinRadius);
+
+      setCardStatus("ready");
+    } catch (err) {
+      console.error("Error getting location:", err);
+      setCardStatus("error");
+
+      // Reset after 3 seconds
+      setTimeout(() => {
+        setCardStatus("idle");
+      }, 3000);
+    }
+  };
+
+  const handleCheckIn = async () => {
+    setCardStatus("processing");
+
+    try {
+      // Simulate API call
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      setAttendanceStatus("checked_in");
+      setCardStatus("success");
+
+      // Reset card status after showing success
+      setTimeout(() => {
+        setCardStatus("idle");
+      }, 3000);
+    } catch (err) {
+      console.error("Error checking in:", err);
+      setCardStatus("error");
+
+      setTimeout(() => {
+        setCardStatus("ready");
+      }, 3000);
+    }
+  };
+
+  const handleCheckOut = async () => {
+    setCardStatus("processing");
+
+    try {
+      // Simulate API call
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      setAttendanceStatus("checked_out");
+      setCardStatus("success");
+
+      setTimeout(() => {
+        setCardStatus("idle");
+      }, 3000);
+    } catch (err) {
+      console.error("Error checking out:", err);
+      setCardStatus("error");
+
+      setTimeout(() => {
+        setCardStatus("ready");
+      }, 3000);
+    }
+  };
+
+  const handleHeroCheckIn = () => {
+    if (cardStatus === "idle") {
+      handleGetLocation();
+    } else if (cardStatus === "ready" && isWithinRadius) {
+      handleCheckIn();
+    }
+  };
+
+  const handleHeroCheckOut = () => {
+    if (cardStatus === "idle") {
+      handleGetLocation();
+    } else if (cardStatus === "ready" && isWithinRadius) {
+      handleCheckOut();
+    }
+  };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 to-gray-100">
-      {/* Header */}
-      <header className="border-b border-gray-200 bg-white/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <motion.h1
-              className="text-2xl font-bold text-gray-800"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-            >
-              Absen Smart
-            </motion.h1>
-            <div className="flex items-center gap-4 text-sm text-gray-600">
-              <span>{getGreeting()}</span>
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+    <div className="min-h-screen bg-gray-50">
+      <Header currentPath="/" />
+
+      <HeroSection
+        userName="John Doe"
+        attendanceStatus={attendanceStatus}
+        lastCheckIn={attendanceStatus === "checked_in" ? "09:15" : undefined}
+        currentLocation="Jakarta Pusat"
+        onCheckIn={handleHeroCheckIn}
+        onCheckOut={handleHeroCheckOut}
+      />
+
+      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+        <div className="text-center mb-12">
+          <h2 className="text-3xl font-light text-gray-800 mb-4">
+            Proses Absensi
+          </h2>
+          <p className="text-gray-600 max-w-2xl mx-auto">
+            Lakukan absensi dengan mudah melalui sistem yang terintegrasi dengan
+            lokasi dan waktu real-time
+          </p>
+        </div>
+
+        <div className="max-w-2xl mx-auto">
+          <AttendanceCard
+            status={cardStatus}
+            userLocation={userLocation}
+            onCheckIn={handleCheckIn}
+            onCheckOut={handleCheckOut}
+            onGetLocation={handleGetLocation}
+            isWithinRadius={isWithinRadius}
+            distance={distance}
+            workingHours={workingHours}
+          />
+        </div>
+
+        {/* Additional Info Section */}
+        <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div className="text-center p-6 bg-white rounded-lg shadow-sm border border-gray-200">
+            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+              <svg
+                className="w-6 h-6 text-blue-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+                />
+              </svg>
             </div>
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">
+              Berbasis Lokasi
+            </h3>
+            <p className="text-gray-600 text-sm">
+              Absensi otomatis terverifikasi berdasarkan lokasi GPS yang akurat
+            </p>
+          </div>
+
+          <div className="text-center p-6 bg-white rounded-lg shadow-sm border border-gray-200">
+            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+              <svg
+                className="w-6 h-6 text-green-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">
+              Real-time
+            </h3>
+            <p className="text-gray-600 text-sm">
+              Data tersinkronisasi secara real-time dengan sistem pusat
+            </p>
+          </div>
+
+          <div className="text-center p-6 bg-white rounded-lg shadow-sm border border-gray-200">
+            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+              <svg
+                className="w-6 h-6 text-purple-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">
+              Analytics
+            </h3>
+            <p className="text-gray-600 text-sm">
+              Laporan dan statistik kehadiran yang komprehensif
+            </p>
           </div>
         </div>
-      </header>
-
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        {/* Welcome Section */}
-        <motion.div
-          className="text-center mb-12"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-        >
-          <h2 className="text-4xl font-light text-gray-800 mb-4">
-            Smart Attendance System
-          </h2>
-          <p className="text-gray-600 text-lg max-w-2xl mx-auto">
-            Sistem absensi modern untuk efisiensi dan akurasi yang lebih baik
-          </p>
-        </motion.div>
-
-        {/* Time Display */}
-        <motion.div
-          className="mb-12"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2, duration: 0.6 }}
-        >
-          <Card className="max-w-lg mx-auto text-center bg-white shadow-sm border border-gray-200">
-            <div className="p-8">
-              <div className="text-4xl font-mono font-bold text-gray-800 mb-2">
-                {currentTime}
-              </div>
-              <div className="text-gray-500 text-sm">{currentDate}</div>
-            </div>
-          </Card>
-        </motion.div>
-
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
-          {[
-            {
-              icon: Calendar,
-              label: "Status Hari Ini",
-              value: "Belum Absen",
-              color: "text-amber-600",
-              bgColor: "bg-amber-50",
-            },
-            {
-              icon: Users,
-              label: "Tim Online",
-              value: "24 Orang",
-              color: "text-emerald-600",
-              bgColor: "bg-emerald-50",
-            },
-            {
-              icon: MapPin,
-              label: "Lokasi Kantor",
-              value: "Jakarta Pusat",
-              color: "text-blue-600",
-              bgColor: "bg-blue-50",
-            },
-            {
-              icon: Clock,
-              label: "Streak",
-              value: "7 Hari",
-              color: "text-purple-600",
-              bgColor: "bg-purple-50",
-            },
-          ].map((stat, index) => (
-            <motion.div
-              key={index}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 + index * 0.1, duration: 0.5 }}
-            >
-              <Card className="bg-white border border-gray-200 hover:shadow-md transition-shadow">
-                <div className="p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <div
-                      className={`w-10 h-10 rounded-lg ${stat.bgColor} flex items-center justify-center`}
-                    >
-                      <stat.icon className={`w-5 h-5 ${stat.color}`} />
-                    </div>
-                  </div>
-                  <div className="text-sm text-gray-500 mb-1">{stat.label}</div>
-                  <div className="text-xl font-semibold text-gray-800">
-                    {stat.value}
-                  </div>
-                </div>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Action Buttons */}
-        <motion.div
-          className="flex flex-col sm:flex-row gap-4 justify-center mb-16"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.7, duration: 0.6 }}
-        >
-          <Button
-            size="lg"
-            className="bg-gray-900 hover:bg-gray-800 text-white font-medium px-8 py-3 rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
-          >
-            <Clock className="w-5 h-5 mr-2" />
-            Absen Masuk
-          </Button>
-          <Button
-            size="lg"
-            variant="ghost"
-            className="border border-gray-300 text-gray-700 hover:bg-gray-50 font-medium px-8 py-3 rounded-lg transition-all duration-200"
-          >
-            Lihat Dashboard
-          </Button>
-        </motion.div>
-
-        {/* Feature Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {[
-            {
-              title: "Deteksi Lokasi",
-              description:
-                "Validasi kehadiran berdasarkan lokasi GPS yang akurat dan real-time",
-              icon: MapPin,
-            },
-            {
-              title: "Sinkronisasi Real-time",
-              description:
-                "Data tersimpan otomatis dan tersinkronisasi dengan sistem pusat",
-              icon: Clock,
-            },
-            {
-              title: "Laporan Analytics",
-              description:
-                "Dashboard komprehensif dengan insights dan statistik kehadiran",
-              icon: Users,
-            },
-          ].map((feature, index) => (
-            <motion.div
-              key={index}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.8 + index * 0.1, duration: 0.6 }}
-            >
-              <Card className="bg-white border border-gray-200 h-full hover:shadow-md transition-shadow">
-                <div className="p-6">
-                  <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-4">
-                    <feature.icon className="w-6 h-6 text-gray-600" />
-                  </div>
-                  <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                    {feature.title}
-                  </h3>
-                  <p className="text-gray-600 text-sm leading-relaxed">
-                    {feature.description}
-                  </p>
-                </div>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
-      </div>
+      </main>
 
       {/* Footer */}
       <footer className="border-t border-gray-200 bg-white mt-16">
-        <div className="max-w-6xl mx-auto px-4 py-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="text-center text-sm text-gray-500">
-            Built with Next.js 14 & TypeScript
+            <p>&copy; 2025 Absen Smart. Built with Next.js 14 & TypeScript</p>
           </div>
         </div>
       </footer>
-    </main>
+    </div>
   );
 }
