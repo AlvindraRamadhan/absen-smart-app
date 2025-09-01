@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   LayoutContainer,
   Section,
@@ -9,7 +9,19 @@ import {
 import { AttendanceForm } from "@/components/forms/attendance-form";
 import { AttendanceCard } from "@/components/attendance/attendance-card";
 import { Card } from "@/components/ui/card";
-import { Clock, CheckCircle, XCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Clock,
+  CheckCircle,
+  XCircle,
+  Navigation,
+  MapPin,
+  AlertTriangle,
+  TestTube,
+  Database,
+} from "lucide-react";
+import { useAttendance } from "@/hooks/use-attendance";
+import { useGeolocation, type LocationData } from "@/hooks/use-geolocation";
 
 interface AttendanceFormData {
   employeeId: string;
@@ -18,72 +30,373 @@ interface AttendanceFormData {
   photo?: File | null;
 }
 
+interface CampusLocation {
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius: number;
+}
+
+interface ProximityResult {
+  closestCampus: CampusLocation | null;
+  distance: number;
+  isWithinRadius: boolean;
+}
+
 export default function AttendancePage() {
-  const [userLocation, setUserLocation] = useState<GeolocationCoordinates>();
-  const [attendanceStatus, setAttendanceStatus] = useState<
-    "not_checked_in" | "checked_in" | "checked_out"
-  >("not_checked_in");
-  const [isLoading, setIsLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [cardStatus, setCardStatus] = useState<
+    "idle" | "checking_location" | "ready" | "processing" | "success" | "error"
+  >("idle");
+  const [isTestMode, setIsTestMode] = useState(false);
+  const [testLocation, setTestLocation] = useState<LocationData | null>(null);
 
-  // Mock working hours
-  const workingHours = {
-    start: "09:00",
-    end: "17:00",
-    lateThreshold: "09:15",
-  };
+  // Employee data - normally from auth context
+  const employeeData = useMemo(
+    () => ({
+      id: "EMP001",
+      name: "John Doe",
+    }),
+    []
+  );
 
-  const handleFormSubmit = async (
-    data: AttendanceFormData & { location: GeolocationCoordinates }
-  ) => {
-    setIsLoading(true);
+  // Campus locations for UAD - memoized to prevent re-creation
+  const campusLocations: CampusLocation[] = useMemo(
+    () => [
+      {
+        name: "UAD Campus 4 (Main Campus)",
+        latitude: -7.8003,
+        longitude: 110.3752,
+        radius: 800,
+      },
+      {
+        name: "UAD Campus 1",
+        latitude: -7.7956,
+        longitude: 110.3691,
+        radius: 500,
+      },
+      {
+        name: "UAD Campus 2",
+        latitude: -7.8022,
+        longitude: 110.3829,
+        radius: 500,
+      },
+      {
+        name: "UAD Campus 3",
+        latitude: -7.8047,
+        longitude: 110.3638,
+        radius: 500,
+      },
+    ],
+    []
+  );
 
-    try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+  // Use existing hooks with custom office location
+  const {
+    location: realLocation,
+    error: locationError,
+    isLoading: locationLoading,
+    getCurrentLocation,
+  } = useGeolocation({
+    enableHighAccuracy: true,
+    timeout: 20000,
+    maximumAge: 0,
+    officeLocation: {
+      latitude: campusLocations[0].latitude,
+      longitude: campusLocations[0].longitude,
+      radius: campusLocations[0].radius,
+      address: "Universitas Ahmad Dahlan",
+    },
+  });
 
-      console.log("Form submitted:", data);
+  const {
+    todayAttendance,
+    isLoading: attendanceLoading,
+    error: attendanceError,
+    checkIn,
+    checkOut,
+    canCheckIn,
+    canCheckOut,
+    refreshAttendance,
+  } = useAttendance({
+    employeeId: employeeData.id,
+    autoRefresh: true,
+  });
 
-      // Update attendance status
-      if (attendanceStatus === "not_checked_in") {
-        setAttendanceStatus("checked_in");
-      } else {
-        setAttendanceStatus("checked_out");
-      }
+  // Location calculation state
+  const [distanceFromOffice, setDistanceFromOffice] = useState<number | null>(
+    null
+  );
+  const [isWithinOfficeRadius, setIsWithinOfficeRadius] = useState(false);
 
-      setShowForm(false);
-    } catch (error) {
-      console.error("Submission error:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // Working hours
+  const workingHours = useMemo(
+    () => ({
+      start: "07:00",
+      end: "17:00",
+      lateThreshold: "08:00",
+    }),
+    []
+  );
 
-  const handleGetLocation = async () => {
-    try {
-      const position = await new Promise<GeolocationPosition>(
-        (resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 60000,
-          });
+  // Calculate distance using Haversine formula
+  const calculateDistance = useCallback(
+    (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+      const R = 6371e3; // Earth's radius in meters
+      const φ1 = (lat1 * Math.PI) / 180;
+      const φ2 = (lat2 * Math.PI) / 180;
+      const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+      const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+      const a =
+        Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+        Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+      return R * c;
+    },
+    []
+  );
+
+  // Check campus proximity
+  const checkCampusProximity = useCallback(
+    (userLat: number, userLon: number): ProximityResult => {
+      let closestCampus: CampusLocation | null = null;
+      let minDistance = Infinity;
+      let isWithinAnyRadius = false;
+
+      campusLocations.forEach((campus) => {
+        const distance = calculateDistance(
+          userLat,
+          userLon,
+          campus.latitude,
+          campus.longitude
+        );
+
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestCampus = campus;
         }
+
+        if (distance <= campus.radius) {
+          isWithinAnyRadius = true;
+        }
+      });
+
+      return {
+        closestCampus,
+        distance: minDistance,
+        isWithinRadius: isWithinAnyRadius,
+      };
+    },
+    [calculateDistance, campusLocations]
+  );
+
+  // Get effective location (real or test)
+  const effectiveLocation = isTestMode ? testLocation : realLocation;
+
+  // Update proximity when location changes
+  useEffect(() => {
+    if (effectiveLocation) {
+      const proximityResult = checkCampusProximity(
+        effectiveLocation.latitude,
+        effectiveLocation.longitude
       );
 
-      setUserLocation(position.coords);
+      setDistanceFromOffice(proximityResult.distance);
+      setIsWithinOfficeRadius(proximityResult.isWithinRadius);
+
+      console.log("=== LOCATION UPDATE ===");
+      console.log("User Location:", {
+        lat: effectiveLocation.latitude,
+        lng: effectiveLocation.longitude,
+        accuracy: effectiveLocation.accuracy,
+      });
+      console.log(
+        "Distance to closest campus:",
+        `${Math.round(proximityResult.distance)}m`
+      );
+      console.log("Within radius:", proximityResult.isWithinRadius);
+      console.log("Test mode:", isTestMode);
+    }
+  }, [effectiveLocation, isTestMode, checkCampusProximity]);
+
+  // Handle test mode
+  const handleTestMode = useCallback(() => {
+    const mockLocation: LocationData = {
+      latitude: -7.8003,
+      longitude: 110.3752,
+      accuracy: 10,
+      timestamp: Date.now(),
+    };
+
+    setTestLocation(mockLocation);
+    setIsTestMode(true);
+    setCardStatus("ready");
+
+    console.log("🧪 Test mode activated - simulated location near UAD campus");
+  }, []);
+
+  // Handle get location
+  const handleGetLocation = useCallback(async () => {
+    setCardStatus("checking_location");
+    setIsTestMode(false);
+    setTestLocation(null);
+
+    try {
+      await getCurrentLocation();
+      setCardStatus("ready");
     } catch (error) {
       console.error("Location error:", error);
+      setCardStatus("error");
+      setTimeout(() => setCardStatus("idle"), 3000);
     }
-  };
+  }, [getCurrentLocation]);
 
-  const handleStartAttendance = () => {
-    if (!userLocation) {
-      handleGetLocation();
+  // Handle start attendance flow
+  const handleStartAttendance = useCallback(async () => {
+    if (!effectiveLocation) {
+      await handleGetLocation();
     } else {
       setShowForm(true);
     }
-  };
+  }, [effectiveLocation, handleGetLocation]);
+
+  // Handle form submission
+  const handleFormSubmit = useCallback(
+    async (data: AttendanceFormData & { location: GeolocationCoordinates }) => {
+      if (!effectiveLocation || distanceFromOffice === null) return;
+
+      setCardStatus("processing");
+
+      try {
+        const result = await checkIn(
+          {
+            employeeId: data.employeeId,
+            employeeName: data.employeeName,
+            notes: data.notes,
+            photoUrl: data.photo ? "uploaded_photo_url" : undefined,
+          },
+          effectiveLocation
+        );
+
+        if (result.success) {
+          console.log("✅ Check-in successful: Data saved to Google Sheets");
+          setCardStatus("success");
+          setShowForm(false);
+
+          setTimeout(() => {
+            setCardStatus("idle");
+          }, 3000);
+        } else {
+          console.error("❌ Check-in failed:", result.error || "Unknown error");
+          setCardStatus("error");
+
+          setTimeout(() => {
+            setCardStatus("ready");
+          }, 3000);
+        }
+      } catch (error) {
+        console.error("Form submission error:", error);
+        setCardStatus("error");
+
+        setTimeout(() => {
+          setCardStatus("ready");
+        }, 3000);
+      }
+    },
+    [effectiveLocation, distanceFromOffice, checkIn]
+  );
+
+  // Handle quick check in
+  const handleCheckInClick = useCallback(async () => {
+    if (!effectiveLocation || distanceFromOffice === null) return;
+
+    setCardStatus("processing");
+
+    try {
+      const result = await checkIn(
+        {
+          employeeId: employeeData.id,
+          employeeName: employeeData.name,
+          notes: `Quick check-in ${isTestMode ? "(Test Mode)" : ""}`,
+        },
+        effectiveLocation
+      );
+
+      if (result.success) {
+        console.log("✅ Quick check-in successful");
+        setCardStatus("success");
+        setTimeout(() => setCardStatus("idle"), 3000);
+      } else {
+        console.error(
+          "❌ Quick check-in failed:",
+          result.error || "Unknown error"
+        );
+        setCardStatus("error");
+        setTimeout(() => setCardStatus("ready"), 3000);
+      }
+    } catch (error) {
+      console.error("Check in error:", error);
+      setCardStatus("error");
+      setTimeout(() => setCardStatus("ready"), 3000);
+    }
+  }, [
+    effectiveLocation,
+    distanceFromOffice,
+    checkIn,
+    isTestMode,
+    employeeData.id,
+    employeeData.name,
+  ]);
+
+  // Handle check out
+  const handleCheckOutClick = useCallback(async () => {
+    setCardStatus("processing");
+
+    try {
+      const result = await checkOut();
+
+      if (result.success) {
+        console.log("✅ Check-out successful");
+        setCardStatus("success");
+        setTimeout(() => setCardStatus("idle"), 3000);
+      } else {
+        console.error("❌ Check-out failed:", result.error || "Unknown error");
+        setCardStatus("error");
+        setTimeout(() => setCardStatus("ready"), 3000);
+      }
+    } catch (error) {
+      console.error("Check out error:", error);
+      setCardStatus("error");
+      setTimeout(() => setCardStatus("ready"), 3000);
+    }
+  }, [checkOut]);
+
+  // Test Google Sheets connection
+  const handleTestConnection = useCallback(async () => {
+    setCardStatus("processing");
+
+    try {
+      await refreshAttendance();
+      setCardStatus("success");
+      console.log("✅ Google Sheets connection test successful");
+      setTimeout(() => setCardStatus("idle"), 3000);
+    } catch (error) {
+      console.error("❌ Google Sheets connection test failed:", error);
+      setCardStatus("error");
+      setTimeout(() => setCardStatus("idle"), 3000);
+    }
+  }, [refreshAttendance]);
+
+  // Check browser geolocation support
+  const isGeolocationSupported =
+    typeof navigator !== "undefined" && "geolocation" in navigator;
+
+  // Determine if we have location
+  const hasLocation = Boolean(effectiveLocation);
+  const currentLocationError = locationError && !isTestMode;
 
   return (
     <LayoutContainer currentPath="/attendance" maxWidth="7xl">
@@ -97,21 +410,21 @@ export default function AttendancePage() {
           {/* Attendance Card */}
           <div>
             <AttendanceCard
-              status={showForm ? "ready" : "idle"}
+              status={cardStatus}
               userLocation={
-                userLocation
+                hasLocation
                   ? {
-                      latitude: userLocation.latitude,
-                      longitude: userLocation.longitude,
-                      accuracy: userLocation.accuracy,
+                      latitude: effectiveLocation!.latitude,
+                      longitude: effectiveLocation!.longitude,
+                      accuracy: effectiveLocation!.accuracy,
                     }
                   : undefined
               }
-              onCheckIn={handleStartAttendance}
-              onCheckOut={handleStartAttendance}
+              onCheckIn={handleCheckInClick}
+              onCheckOut={handleCheckOutClick}
               onGetLocation={handleGetLocation}
-              isWithinRadius={true} // Mock: assume within radius
-              distance={50} // Mock distance
+              isWithinRadius={isWithinOfficeRadius}
+              distance={distanceFromOffice || undefined}
               workingHours={workingHours}
             />
           </div>
@@ -121,14 +434,25 @@ export default function AttendancePage() {
             {showForm ? (
               <AttendanceForm
                 onSubmit={handleFormSubmit}
-                userLocation={userLocation}
-                isLoading={isLoading}
-                mode={
-                  attendanceStatus === "not_checked_in" ? "checkin" : "checkout"
+                userLocation={
+                  hasLocation
+                    ? ({
+                        latitude: effectiveLocation!.latitude,
+                        longitude: effectiveLocation!.longitude,
+                        accuracy: effectiveLocation!.accuracy,
+                        altitude: null,
+                        altitudeAccuracy: null,
+                        heading: null,
+                        speed: null,
+                        toJSON: () => ({}),
+                      } as GeolocationCoordinates)
+                    : undefined
                 }
+                isLoading={cardStatus === "processing" || attendanceLoading}
+                mode="checkin"
                 initialData={{
-                  employeeId: "EMP001",
-                  employeeName: "John Doe",
+                  employeeId: employeeData.id,
+                  employeeName: employeeData.name,
                 }}
               />
             ) : (
@@ -140,24 +464,94 @@ export default function AttendancePage() {
                   <h3 className="text-2xl font-semibold text-gray-800 mb-4">
                     Status Kehadiran
                   </h3>
+
+                  {/* Google Sheets Service Status */}
+                  <div className="mb-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="flex items-center justify-center space-x-2">
+                      <Database className="w-4 h-4 text-blue-600" />
+                      <span className="text-blue-800 font-medium text-sm">
+                        {attendanceLoading
+                          ? "Connecting..."
+                          : attendanceError
+                          ? "Connection Error"
+                          : "Google Sheets Ready"}
+                      </span>
+                    </div>
+                    {attendanceError && (
+                      <div className="text-red-600 text-xs mt-1">
+                        {attendanceError}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Test Mode Indicator */}
+                  {isTestMode && (
+                    <div className="mb-6 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <div className="flex items-center justify-center space-x-2">
+                        <TestTube className="w-4 h-4 text-yellow-600" />
+                        <span className="text-yellow-800 font-medium text-sm">
+                          Mode Testing Aktif
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Error Display */}
+                  {currentLocationError && (
+                    <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                      <div className="flex items-center justify-center space-x-2 mb-2">
+                        <AlertTriangle className="w-5 h-5 text-red-600" />
+                        <span className="text-red-800 font-medium">
+                          Error Lokasi
+                        </span>
+                      </div>
+                      <div className="text-red-700 text-sm">
+                        {(currentLocationError as any)?.message ||
+                          "Gagal mendapatkan lokasi GPS"}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Location Status */}
+                  {hasLocation && !currentLocationError && (
+                    <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="flex items-center justify-center space-x-2 mb-2">
+                        <MapPin className="w-5 h-5 text-blue-600" />
+                        <span className="text-blue-800 font-medium">
+                          {isWithinOfficeRadius
+                            ? "Dalam jangkauan kampus"
+                            : "Di luar jangkauan kampus"}
+                        </span>
+                      </div>
+                      {distanceFromOffice && (
+                        <div className="text-blue-600 text-sm">
+                          Jarak: {distanceFromOffice.toFixed(0)} meter dari
+                          kampus terdekat
+                        </div>
+                      )}
+                      <div className="text-blue-500 text-xs mt-2">
+                        {isTestMode
+                          ? "Mode Testing (GPS Simulation)"
+                          : `Akurasi GPS: ±${effectiveLocation?.accuracy?.toFixed(
+                              0
+                            )}m`}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="space-y-4">
                     <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                       <span className="font-medium text-gray-700">
                         Status Hari Ini:
                       </span>
                       <div className="flex items-center space-x-2">
-                        {attendanceStatus === "checked_in" ? (
+                        {todayAttendance?.checkIn ? (
                           <>
                             <CheckCircle className="w-5 h-5 text-green-500" />
                             <span className="text-green-600 font-medium">
-                              Sudah Check In
-                            </span>
-                          </>
-                        ) : attendanceStatus === "checked_out" ? (
-                          <>
-                            <CheckCircle className="w-5 h-5 text-blue-500" />
-                            <span className="text-blue-600 font-medium">
-                              Sudah Check Out
+                              {todayAttendance.checkOut
+                                ? "Selesai"
+                                : "Sudah Check In"}
                             </span>
                           </>
                         ) : (
@@ -171,6 +565,56 @@ export default function AttendancePage() {
                       </div>
                     </div>
 
+                    {todayAttendance?.checkIn && (
+                      <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                        <span className="font-medium text-gray-700">
+                          Check In:
+                        </span>
+                        <span className="text-gray-600">
+                          {todayAttendance.checkIn}
+                        </span>
+                      </div>
+                    )}
+
+                    {todayAttendance?.checkOut && (
+                      <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                        <span className="font-medium text-gray-700">
+                          Check Out:
+                        </span>
+                        <span className="text-gray-600">
+                          {todayAttendance.checkOut}
+                        </span>
+                      </div>
+                    )}
+
+                    {todayAttendance?.status && (
+                      <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                        <span className="font-medium text-gray-700">
+                          Status:
+                        </span>
+                        <span
+                          className={`font-medium ${
+                            todayAttendance.status === "present"
+                              ? "text-green-600"
+                              : todayAttendance.status === "late"
+                              ? "text-yellow-600"
+                              : "text-red-600"
+                          }`}
+                        >
+                          {todayAttendance.status === "present"
+                            ? "Hadir"
+                            : todayAttendance.status === "late"
+                            ? "Terlambat"
+                            : "Tidak Hadir"}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <span className="font-medium text-gray-700">Lokasi:</span>
+                      <span className="text-gray-600">Kampus UAD</span>
+                    </div>
+
                     <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                       <span className="font-medium text-gray-700">
                         Jam Kerja:
@@ -179,15 +623,138 @@ export default function AttendancePage() {
                         {workingHours.start} - {workingHours.end}
                       </span>
                     </div>
+                  </div>
 
-                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                      <span className="font-medium text-gray-700">
-                        Batas Terlambat:
-                      </span>
-                      <span className="text-gray-600">
-                        {workingHours.lateThreshold}
-                      </span>
-                    </div>
+                  {/* Action Buttons */}
+                  <div className="mt-6 space-y-3">
+                    {!isGeolocationSupported && (
+                      <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <div className="text-yellow-700 text-sm text-center">
+                          Browser tidak mendukung deteksi lokasi. Gunakan Test
+                          Mode.
+                        </div>
+                      </div>
+                    )}
+
+                    {isGeolocationSupported && !hasLocation && (
+                      <Button
+                        onClick={handleGetLocation}
+                        disabled={
+                          locationLoading || cardStatus === "checking_location"
+                        }
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-lg transition-all duration-200"
+                      >
+                        {locationLoading ||
+                        cardStatus === "checking_location" ? (
+                          <>
+                            <Navigation className="w-5 h-5 mr-2 animate-spin" />
+                            Mengambil Lokasi GPS...
+                          </>
+                        ) : (
+                          <>
+                            <Navigation className="w-5 h-5 mr-2" />
+                            Ambil Lokasi
+                          </>
+                        )}
+                      </Button>
+                    )}
+
+                    {hasLocation &&
+                      !currentLocationError &&
+                      isWithinOfficeRadius &&
+                      canCheckIn && (
+                        <Button
+                          onClick={handleStartAttendance}
+                          disabled={attendanceLoading}
+                          className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 rounded-lg transition-all duration-200"
+                        >
+                          <CheckCircle className="w-5 h-5 mr-2" />
+                          Mulai Absensi
+                        </Button>
+                      )}
+
+                    {hasLocation &&
+                      !currentLocationError &&
+                      isWithinOfficeRadius &&
+                      !canCheckIn &&
+                      todayAttendance &&
+                      canCheckOut && (
+                        <Button
+                          onClick={handleCheckOutClick}
+                          disabled={attendanceLoading}
+                          className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-3 rounded-lg transition-all duration-200"
+                        >
+                          <CheckCircle className="w-5 h-5 mr-2" />
+                          Check Out
+                        </Button>
+                      )}
+
+                    {hasLocation &&
+                      !currentLocationError &&
+                      !isWithinOfficeRadius && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                          <div className="text-red-700 text-sm text-center">
+                            Anda berada di luar jangkauan kampus. Silakan
+                            mendekati area Universitas Ahmad Dahlan untuk
+                            melakukan absensi.
+                          </div>
+                        </div>
+                      )}
+
+                    {todayAttendance && !canCheckIn && !canCheckOut && (
+                      <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                        <div className="text-green-700 text-sm text-center">
+                          Absensi hari ini sudah selesai. Terima kasih!
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Test Mode and Retry Buttons */}
+                    {currentLocationError && (
+                      <div className="space-y-2">
+                        <Button
+                          onClick={handleGetLocation}
+                          disabled={locationLoading}
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-lg transition-all duration-200"
+                        >
+                          <Navigation className="w-5 h-5 mr-2" />
+                          Coba Lagi
+                        </Button>
+
+                        <Button
+                          onClick={handleTestMode}
+                          className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 rounded-lg transition-all duration-200"
+                        >
+                          <TestTube className="w-4 h-4 mr-2" />
+                          Mode Testing
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Always show test mode button for development */}
+                    {!hasLocation &&
+                      !currentLocationError &&
+                      isGeolocationSupported && (
+                        <Button
+                          onClick={handleTestMode}
+                          className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 rounded-lg transition-all duration-200"
+                        >
+                          <TestTube className="w-4 h-4 mr-2" />
+                          Mode Testing
+                        </Button>
+                      )}
+
+                    {/* Google Sheets Test Button */}
+                    <Button
+                      onClick={handleTestConnection}
+                      disabled={
+                        attendanceLoading || cardStatus === "processing"
+                      }
+                      className="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 rounded-lg transition-all duration-200"
+                    >
+                      <Database className="w-4 h-4 mr-2" />
+                      Test Google Sheets
+                    </Button>
                   </div>
                 </div>
               </Card>
@@ -196,18 +763,19 @@ export default function AttendancePage() {
         </Grid>
       </Section>
 
-      {/* Additional Info Section */}
+      {/* Feature Info Section */}
       <Section background="gray" padding="xl">
         <Grid cols={{ default: 1, md: 3 }} gap="lg">
           <Card className="text-center p-6">
             <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <Clock className="w-6 h-6 text-blue-600" />
+              <Database className="w-6 h-6 text-blue-600" />
             </div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">
-              Real-time Tracking
+              Real-time Google Sheets
             </h3>
             <p className="text-gray-600 text-sm">
-              Pantau waktu kehadiran secara real-time dengan akurasi tinggi
+              Data attendance tersimpan real-time di Google Sheets dengan backup
+              otomatis
             </p>
           </Card>
 
@@ -216,34 +784,23 @@ export default function AttendancePage() {
               <CheckCircle className="w-6 h-6 text-green-600" />
             </div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">
-              Validasi Otomatis
+              Status Persistence
             </h3>
             <p className="text-gray-600 text-sm">
-              Sistem validasi otomatis dengan lokasi dan foto untuk akurasi
+              Status kehadiran tersimpan permanen dan dapat diakses kapan saja
             </p>
           </Card>
 
           <Card className="text-center p-6">
             <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <svg
-                className="w-6 h-6 text-purple-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                />
-              </svg>
+              <Clock className="w-6 h-6 text-purple-600" />
             </div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">
-              Laporan Detail
+              Smart Detection
             </h3>
             <p className="text-gray-600 text-sm">
-              Dapatkan laporan kehadiran yang lengkap dan mudah dianalisis
+              Deteksi otomatis status terlambat berdasarkan jam check-in dan
+              aturan kantor
             </p>
           </Card>
         </Grid>
