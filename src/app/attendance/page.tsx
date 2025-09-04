@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
@@ -23,6 +22,7 @@ import {
   Database,
 } from "lucide-react";
 import { useGeolocation, type LocationData } from "@/hooks/use-geolocation";
+import { useAppContext } from "@/context/AppContext";
 
 interface AttendanceFormData {
   employeeId: string;
@@ -44,15 +44,8 @@ interface ProximityResult {
   isWithinRadius: boolean;
 }
 
-interface MockAttendanceRecord {
-  checkIn?: string;
-  checkOut?: string;
-  status?: "present" | "late" | "absent";
-  date: string;
-}
-
 export default function AttendancePage() {
-  // All hooks must be called before any conditional returns
+  // ** SEMUA HOOKS HARUS DI ATAS SINI **
   const [mounted, setMounted] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [cardStatus, setCardStatus] = useState<
@@ -60,24 +53,23 @@ export default function AttendancePage() {
   >("idle");
   const [isTestMode, setIsTestMode] = useState(false);
   const [testLocation, setTestLocation] = useState<LocationData | null>(null);
-  const [mockAttendance, setMockAttendance] =
-    useState<MockAttendanceRecord | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [distanceFromOffice, setDistanceFromOffice] = useState<number | null>(
     null
   );
   const [isWithinOfficeRadius, setIsWithinOfficeRadius] = useState(false);
 
-  // Employee data - memoized
-  const employeeData = useMemo(
-    () => ({
-      id: "EMP001",
-      name: "John Doe",
-    }),
-    []
-  );
+  const {
+    user,
+    todayAttendance,
+    isLoading: attendanceLoading,
+    error: attendanceError,
+    canCheckIn,
+    canCheckOut,
+    checkIn,
+    checkOut,
+    refreshAttendance,
+  } = useAppContext();
 
-  // Campus locations - memoized
   const campusLocations: CampusLocation[] = useMemo(
     () => [
       {
@@ -108,7 +100,6 @@ export default function AttendancePage() {
     []
   );
 
-  // Working hours - memoized
   const workingHours = useMemo(
     () => ({
       start: "07:00",
@@ -118,51 +109,40 @@ export default function AttendancePage() {
     []
   );
 
-  // Use geolocation hook
   const {
     location: realLocation,
     error: locationError,
     isLoading: locationLoading,
     getCurrentLocation,
   } = useGeolocation({
-    enableHighAccuracy: true,
-    timeout: 20000,
-    maximumAge: 0,
     officeLocation: {
       latitude: campusLocations[0].latitude,
       longitude: campusLocations[0].longitude,
       radius: campusLocations[0].radius,
-      address: "Universitas Ahmad Dahlan",
     },
   });
 
-  // Calculate distance using Haversine formula
   const calculateDistance = useCallback(
     (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-      const R = 6371e3; // Earth's radius in meters
+      const R = 6371e3;
       const φ1 = (lat1 * Math.PI) / 180;
       const φ2 = (lat2 * Math.PI) / 180;
       const Δφ = ((lat2 - lat1) * Math.PI) / 180;
       const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-
       const a =
         Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
         Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
       return R * c;
     },
     []
   );
 
-  // Check campus proximity
   const checkCampusProximity = useCallback(
     (userLat: number, userLon: number): ProximityResult => {
       let closestCampus: CampusLocation | null = null;
       let minDistance = Infinity;
       let isWithinAnyRadius = false;
-
       campusLocations.forEach((campus) => {
         const distance = calculateDistance(
           userLat,
@@ -170,17 +150,14 @@ export default function AttendancePage() {
           campus.latitude,
           campus.longitude
         );
-
         if (distance < minDistance) {
           minDistance = distance;
           closestCampus = campus;
         }
-
         if (distance <= campus.radius) {
           isWithinAnyRadius = true;
         }
       });
-
       return {
         closestCampus,
         distance: minDistance,
@@ -190,65 +167,19 @@ export default function AttendancePage() {
     [calculateDistance, campusLocations]
   );
 
-  // Mock check in function
-  const mockCheckIn = useCallback(async (data: any) => {
-    setIsLoading(true);
+  const effectiveLocation = isTestMode ? testLocation : realLocation;
 
-    // Simulate API call delay
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+  useEffect(() => {
+    if (effectiveLocation) {
+      const proximityResult = checkCampusProximity(
+        effectiveLocation.latitude,
+        effectiveLocation.longitude
+      );
+      setDistanceFromOffice(proximityResult.distance);
+      setIsWithinOfficeRadius(proximityResult.isWithinRadius);
+    }
+  }, [effectiveLocation, checkCampusProximity]);
 
-    const now = new Date();
-    const currentTime = now.toLocaleTimeString("en-GB", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    // Determine status based on time
-    const workStart = new Date();
-    workStart.setHours(8, 0, 0, 0); // 08:00 AM
-    const status = now > workStart ? "late" : "present";
-
-    const newRecord: MockAttendanceRecord = {
-      checkIn: currentTime,
-      status,
-      date: now.toISOString().split("T")[0],
-    };
-
-    setMockAttendance(newRecord);
-    setIsLoading(false);
-
-    console.log("Mock check-in successful:", newRecord);
-    return { success: true, data: newRecord };
-  }, []);
-
-  // Mock check out function
-  const mockCheckOut = useCallback(async () => {
-    if (!mockAttendance) return { success: false, error: "No check-in record" };
-
-    setIsLoading(true);
-
-    // Simulate API call delay
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    const now = new Date();
-    const currentTime = now.toLocaleTimeString("en-GB", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    const updatedRecord = {
-      ...mockAttendance,
-      checkOut: currentTime,
-    };
-
-    setMockAttendance(updatedRecord);
-    setIsLoading(false);
-
-    console.log("Mock check-out successful:", updatedRecord);
-    return { success: true, data: updatedRecord };
-  }, [mockAttendance]);
-
-  // Handle test mode
   const handleTestMode = useCallback(() => {
     const mockLocation: LocationData = {
       latitude: -7.8003,
@@ -256,20 +187,15 @@ export default function AttendancePage() {
       accuracy: 10,
       timestamp: Date.now(),
     };
-
     setTestLocation(mockLocation);
     setIsTestMode(true);
     setCardStatus("ready");
-
-    console.log("🧪 Test mode activated - simulated location near UAD campus");
   }, []);
 
-  // Handle get location
   const handleGetLocation = useCallback(async () => {
     setCardStatus("checking_location");
     setIsTestMode(false);
     setTestLocation(null);
-
     try {
       await getCurrentLocation();
       setCardStatus("ready");
@@ -280,81 +206,67 @@ export default function AttendancePage() {
     }
   }, [getCurrentLocation]);
 
-  // Handle start attendance flow
   const handleStartAttendance = useCallback(async () => {
-    const effectiveLocation = isTestMode ? testLocation : realLocation;
     if (!effectiveLocation) {
       await handleGetLocation();
     } else {
       setShowForm(true);
     }
-  }, [isTestMode, testLocation, realLocation, handleGetLocation]);
+  }, [effectiveLocation, handleGetLocation]);
 
-  // Handle form submission
   const handleFormSubmit = useCallback(
     async (data: AttendanceFormData & { location: GeolocationCoordinates }) => {
-      const effectiveLocation = isTestMode ? testLocation : realLocation;
-      if (!effectiveLocation || distanceFromOffice === null) return;
-
+      if (!effectiveLocation || distanceFromOffice === null || !user) return;
       setCardStatus("processing");
-
       try {
-        const result = await mockCheckIn({
-          employeeId: data.employeeId,
-          employeeName: data.employeeName,
+        const result = await checkIn({
+          employeeId: user.id,
+          employeeName: user.name,
           notes: data.notes,
-          location: effectiveLocation,
+          location: {
+            latitude: effectiveLocation.latitude,
+            longitude: effectiveLocation.longitude,
+            accuracy: effectiveLocation.accuracy,
+          },
+          photoUrl: data.photo
+            ? `photo_${Date.now()}_${data.photo.name}`
+            : undefined,
         });
-
         if (result.success) {
-          console.log("✅ Check-in successful (Mock Mode)");
           setCardStatus("success");
           setShowForm(false);
-
-          setTimeout(() => {
-            setCardStatus("idle");
-          }, 3000);
+          setTimeout(() => setCardStatus("idle"), 3000);
         } else {
-          console.error("❌ Check-in failed");
           setCardStatus("error");
-
-          setTimeout(() => {
-            setCardStatus("ready");
-          }, 3000);
+          setTimeout(() => setCardStatus("ready"), 3000);
         }
       } catch (error) {
         console.error("Form submission error:", error);
         setCardStatus("error");
-
-        setTimeout(() => {
-          setCardStatus("ready");
-        }, 3000);
+        setTimeout(() => setCardStatus("ready"), 3000);
       }
     },
-    [isTestMode, testLocation, realLocation, distanceFromOffice, mockCheckIn]
+    [effectiveLocation, distanceFromOffice, checkIn, user]
   );
 
-  // Handle quick check in
   const handleCheckInClick = useCallback(async () => {
-    const effectiveLocation = isTestMode ? testLocation : realLocation;
-    if (!effectiveLocation || distanceFromOffice === null) return;
-
+    if (!effectiveLocation || distanceFromOffice === null || !user) return;
     setCardStatus("processing");
-
     try {
-      const result = await mockCheckIn({
-        employeeId: employeeData.id,
-        employeeName: employeeData.name,
+      const result = await checkIn({
+        employeeId: user.id,
+        employeeName: user.name,
         notes: `Quick check-in ${isTestMode ? "(Test Mode)" : ""}`,
-        location: effectiveLocation,
+        location: {
+          latitude: effectiveLocation.latitude,
+          longitude: effectiveLocation.longitude,
+          accuracy: effectiveLocation.accuracy,
+        },
       });
-
       if (result.success) {
-        console.log("✅ Quick check-in successful (Mock Mode)");
         setCardStatus("success");
         setTimeout(() => setCardStatus("idle"), 3000);
       } else {
-        console.error("❌ Quick check-in failed");
         setCardStatus("error");
         setTimeout(() => setCardStatus("ready"), 3000);
       }
@@ -363,28 +275,24 @@ export default function AttendancePage() {
       setCardStatus("error");
       setTimeout(() => setCardStatus("ready"), 3000);
     }
-  }, [
-    isTestMode,
-    testLocation,
-    realLocation,
-    distanceFromOffice,
-    mockCheckIn,
-    employeeData,
-  ]);
+  }, [effectiveLocation, distanceFromOffice, checkIn, isTestMode, user]);
 
-  // Handle check out
   const handleCheckOutClick = useCallback(async () => {
+    if (!effectiveLocation || !user) return;
     setCardStatus("processing");
-
     try {
-      const result = await mockCheckOut();
-
+      const result = await checkOut({
+        employeeId: user.id,
+        location: {
+          latitude: effectiveLocation.latitude,
+          longitude: effectiveLocation.longitude,
+          accuracy: effectiveLocation.accuracy,
+        },
+      });
       if (result.success) {
-        console.log("✅ Check-out successful (Mock Mode)");
         setCardStatus("success");
         setTimeout(() => setCardStatus("idle"), 3000);
       } else {
-        console.error("❌ Check-out failed");
         setCardStatus("error");
         setTimeout(() => setCardStatus("ready"), 3000);
       }
@@ -393,72 +301,42 @@ export default function AttendancePage() {
       setCardStatus("error");
       setTimeout(() => setCardStatus("ready"), 3000);
     }
-  }, [mockCheckOut]);
+  }, [effectiveLocation, checkOut, user]);
 
-  // Mock test connection
   const handleTestConnection = useCallback(async () => {
     setCardStatus("processing");
-
     try {
-      // Simulate connection test
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      setCardStatus("success");
-      console.log("✅ Mock connection test successful");
+      await refreshAttendance();
+      if (attendanceError) {
+        setCardStatus("error");
+      } else {
+        setCardStatus("success");
+      }
       setTimeout(() => setCardStatus("idle"), 3000);
     } catch (error) {
-      console.error("❌ Mock connection test failed:", error);
+      console.error("Connection test error:", error);
       setCardStatus("error");
       setTimeout(() => setCardStatus("idle"), 3000);
     }
-  }, []);
+  }, [refreshAttendance, attendanceError]);
 
-  // Get effective location (real or test)
-  const effectiveLocation = isTestMode ? testLocation : realLocation;
-
-  // Update proximity when location changes
-  useEffect(() => {
-    if (effectiveLocation) {
-      const proximityResult = checkCampusProximity(
-        effectiveLocation.latitude,
-        effectiveLocation.longitude
-      );
-
-      setDistanceFromOffice(proximityResult.distance);
-      setIsWithinOfficeRadius(proximityResult.isWithinRadius);
-
-      console.log("=== LOCATION UPDATE ===");
-      console.log("User Location:", {
-        lat: effectiveLocation.latitude,
-        lng: effectiveLocation.longitude,
-        accuracy: effectiveLocation.accuracy,
-      });
-      console.log(
-        "Distance to closest campus:",
-        `${Math.round(proximityResult.distance)}m`
-      );
-      console.log("Within radius:", proximityResult.isWithinRadius);
-      console.log("Test mode:", isTestMode);
-    }
-  }, [effectiveLocation, isTestMode, checkCampusProximity]);
-
-  // Set mounted state
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Check if can check in/out (mock logic)
-  const canCheckIn = !mockAttendance?.checkIn;
-  const canCheckOut = mockAttendance?.checkIn && !mockAttendance?.checkOut;
-
-  // Check browser geolocation support
   const isGeolocationSupported =
     typeof navigator !== "undefined" && "geolocation" in navigator;
-
-  // Determine if we have location
   const hasLocation = Boolean(effectiveLocation);
   const currentLocationError = locationError && !isTestMode;
 
-  // Early return after all hooks
+  const initialFormData = useMemo(
+    () => ({
+      employeeId: user?.id || "",
+      employeeName: user?.name || "",
+    }),
+    [user]
+  );
+
   if (!mounted) {
     return null;
   }
@@ -513,12 +391,9 @@ export default function AttendancePage() {
                       } as GeolocationCoordinates)
                     : undefined
                 }
-                isLoading={cardStatus === "processing" || isLoading}
+                isLoading={cardStatus === "processing" || attendanceLoading}
                 mode="checkin"
-                initialData={{
-                  employeeId: employeeData.id,
-                  employeeName: employeeData.name,
-                }}
+                initialData={initialFormData}
               />
             ) : (
               <Card className="bg-white shadow-lg border border-gray-200">
@@ -530,20 +405,24 @@ export default function AttendancePage() {
                     Status Kehadiran
                   </h3>
 
-                  {/* Mock Service Status */}
                   <div className="mb-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                     <div className="flex items-center justify-center space-x-2">
                       <Database className="w-4 h-4 text-blue-600" />
                       <span className="text-blue-800 font-medium text-sm">
-                        Mock Mode - UI Testing
+                        {attendanceLoading
+                          ? "Connecting..."
+                          : attendanceError
+                          ? "Connection Error"
+                          : "Google Sheets Connected"}
                       </span>
                     </div>
-                    <div className="text-blue-600 text-xs mt-1">
-                      Data tidak tersimpan permanen
-                    </div>
+                    {attendanceError && (
+                      <div className="text-red-600 text-xs mt-1">
+                        {attendanceError}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Test Mode Indicator */}
                   {isTestMode && (
                     <div className="mb-6 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                       <div className="flex items-center justify-center space-x-2">
@@ -555,7 +434,6 @@ export default function AttendancePage() {
                     </div>
                   )}
 
-                  {/* Error Display */}
                   {currentLocationError && (
                     <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
                       <div className="flex items-center justify-center space-x-2 mb-2">
@@ -571,7 +449,6 @@ export default function AttendancePage() {
                     </div>
                   )}
 
-                  {/* Location Status */}
                   {hasLocation && !currentLocationError && (
                     <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
                       <div className="flex items-center justify-center space-x-2 mb-2">
@@ -604,11 +481,11 @@ export default function AttendancePage() {
                         Status Hari Ini:
                       </span>
                       <div className="flex items-center space-x-2">
-                        {mockAttendance?.checkIn ? (
+                        {todayAttendance?.checkIn ? (
                           <>
                             <CheckCircle className="w-5 h-5 text-green-500" />
                             <span className="text-green-600 font-medium">
-                              {mockAttendance.checkOut
+                              {todayAttendance.checkOut
                                 ? "Selesai"
                                 : "Sudah Check In"}
                             </span>
@@ -624,56 +501,52 @@ export default function AttendancePage() {
                       </div>
                     </div>
 
-                    {mockAttendance?.checkIn && (
+                    {todayAttendance?.checkIn && (
                       <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                         <span className="font-medium text-gray-700">
                           Check In:
                         </span>
                         <span className="text-gray-600">
-                          {mockAttendance.checkIn}
+                          {todayAttendance.checkIn}
                         </span>
                       </div>
                     )}
-
-                    {mockAttendance?.checkOut && (
+                    {todayAttendance?.checkOut && (
                       <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                         <span className="font-medium text-gray-700">
                           Check Out:
                         </span>
                         <span className="text-gray-600">
-                          {mockAttendance.checkOut}
+                          {todayAttendance.checkOut}
                         </span>
                       </div>
                     )}
-
-                    {mockAttendance?.status && (
+                    {todayAttendance?.status && (
                       <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                         <span className="font-medium text-gray-700">
                           Status:
                         </span>
                         <span
                           className={`font-medium ${
-                            mockAttendance.status === "present"
+                            todayAttendance.status === "present"
                               ? "text-green-600"
-                              : mockAttendance.status === "late"
+                              : todayAttendance.status === "late"
                               ? "text-yellow-600"
                               : "text-red-600"
                           }`}
                         >
-                          {mockAttendance.status === "present"
+                          {todayAttendance.status === "present"
                             ? "Hadir"
-                            : mockAttendance.status === "late"
+                            : todayAttendance.status === "late"
                             ? "Terlambat"
                             : "Tidak Hadir"}
                         </span>
                       </div>
                     )}
-
                     <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                       <span className="font-medium text-gray-700">Lokasi:</span>
                       <span className="text-gray-600">Kampus UAD</span>
                     </div>
-
                     <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                       <span className="font-medium text-gray-700">
                         Jam Kerja:
@@ -684,7 +557,6 @@ export default function AttendancePage() {
                     </div>
                   </div>
 
-                  {/* Action Buttons */}
                   <div className="mt-6 space-y-3">
                     {!isGeolocationSupported && (
                       <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
@@ -694,7 +566,6 @@ export default function AttendancePage() {
                         </div>
                       </div>
                     )}
-
                     {isGeolocationSupported && !hasLocation && (
                       <Button
                         onClick={handleGetLocation}
@@ -717,37 +588,34 @@ export default function AttendancePage() {
                         )}
                       </Button>
                     )}
-
                     {hasLocation &&
                       !currentLocationError &&
                       isWithinOfficeRadius &&
                       canCheckIn && (
                         <Button
                           onClick={handleStartAttendance}
-                          disabled={isLoading}
+                          disabled={attendanceLoading}
                           className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 rounded-lg transition-all duration-200"
                         >
                           <CheckCircle className="w-5 h-5 mr-2" />
                           Mulai Absensi
                         </Button>
                       )}
-
                     {hasLocation &&
                       !currentLocationError &&
                       isWithinOfficeRadius &&
                       !canCheckIn &&
-                      mockAttendance &&
+                      todayAttendance &&
                       canCheckOut && (
                         <Button
                           onClick={handleCheckOutClick}
-                          disabled={isLoading}
+                          disabled={attendanceLoading}
                           className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-3 rounded-lg transition-all duration-200"
                         >
                           <CheckCircle className="w-5 h-5 mr-2" />
                           Check Out
                         </Button>
                       )}
-
                     {hasLocation &&
                       !currentLocationError &&
                       !isWithinOfficeRadius && (
@@ -759,16 +627,13 @@ export default function AttendancePage() {
                           </div>
                         </div>
                       )}
-
-                    {mockAttendance && !canCheckIn && !canCheckOut && (
+                    {todayAttendance && !canCheckIn && !canCheckOut && (
                       <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
                         <div className="text-green-700 text-sm text-center">
                           Absensi hari ini sudah selesai. Terima kasih!
                         </div>
                       </div>
                     )}
-
-                    {/* Test Mode and Retry Buttons */}
                     {currentLocationError && (
                       <div className="space-y-2">
                         <Button
@@ -779,7 +644,6 @@ export default function AttendancePage() {
                           <Navigation className="w-5 h-5 mr-2" />
                           Coba Lagi
                         </Button>
-
                         <Button
                           onClick={handleTestMode}
                           className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 rounded-lg transition-all duration-200"
@@ -789,8 +653,6 @@ export default function AttendancePage() {
                         </Button>
                       </div>
                     )}
-
-                    {/* Always show test mode button for development */}
                     {!hasLocation &&
                       !currentLocationError &&
                       isGeolocationSupported && (
@@ -802,15 +664,15 @@ export default function AttendancePage() {
                           Mode Testing
                         </Button>
                       )}
-
-                    {/* Mock Test Button */}
                     <Button
                       onClick={handleTestConnection}
-                      disabled={isLoading || cardStatus === "processing"}
+                      disabled={
+                        attendanceLoading || cardStatus === "processing"
+                      }
                       className="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 rounded-lg transition-all duration-200"
                     >
                       <Database className="w-4 h-4 mr-2" />
-                      Test Connection (Mock)
+                      Test Google Sheets
                     </Button>
                   </div>
                 </div>
@@ -820,7 +682,6 @@ export default function AttendancePage() {
         </Grid>
       </Section>
 
-      {/* Feature Info Section */}
       <Section background="gray" padding="xl">
         <Grid cols={{ default: 1, md: 3 }} gap="lg">
           <Card className="text-center p-6">
@@ -828,34 +689,34 @@ export default function AttendancePage() {
               <Database className="w-6 h-6 text-blue-600" />
             </div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">
-              UI Testing Mode
+              Real Google Sheets Integration
             </h3>
             <p className="text-gray-600 text-sm">
-              Interface testing tanpa backend - data tidak permanen tersimpan
+              Data attendance tersimpan real-time di Google Sheets dengan backup
+              otomatis
             </p>
           </Card>
-
           <Card className="text-center p-6">
             <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4">
               <CheckCircle className="w-6 h-6 text-green-600" />
             </div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">
-              Mock Functionality
+              Persistent Data Storage
             </h3>
             <p className="text-gray-600 text-sm">
-              Semua fitur UI berfungsi dengan simulasi untuk testing experience
+              Status kehadiran tersimpan permanen dan dapat diakses kapan saja
             </p>
           </Card>
-
           <Card className="text-center p-6">
             <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
               <Clock className="w-6 h-6 text-purple-600" />
             </div>
-            <h3 className="text-lg font-semibold text-gray-808 mb-2">
-              Real-time Simulation
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">
+              Smart Time Detection
             </h3>
             <p className="text-gray-600 text-sm">
-              Status dan timing detection bekerja seperti aplikasi production
+              Deteksi otomatis status terlambat berdasarkan jam check-in dan
+              aturan kantor
             </p>
           </Card>
         </Grid>
