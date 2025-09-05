@@ -109,24 +109,48 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const employeeId = searchParams.get("employeeId");
-    if (!employeeId) {
-      return NextResponse.json(
-        { success: false, error: "Employee ID is required" },
-        { status: 400 }
-      );
-    }
     const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-    if (!spreadsheetId) throw new Error("Google Sheets configuration missing");
+
+    if (!spreadsheetId) {
+      throw new Error("Google Sheets configuration missing");
+    }
 
     const sheets = getGoogleSheetsClient();
-    await initializeHeaders(sheets, spreadsheetId); // ** FUNGSI DIPANGGIL DI SINI **
+    await initializeHeaders(sheets, spreadsheetId);
 
-    const record = await getTodayAttendance(sheets, spreadsheetId, employeeId);
-    return NextResponse.json({ success: true, data: record });
-  } catch (error) {
+    // Jika ada employeeId, ambil data hari ini untuk employee tersebut
+    if (employeeId) {
+      const record = await getTodayAttendance(
+        sheets,
+        spreadsheetId,
+        employeeId
+      );
+      return NextResponse.json({ success: true, data: record });
+    }
+
+    // **BAGIAN BARU:** Jika tidak ada employeeId, ambil semua data untuk dashboard
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "Attendance!A2:N", // Ambil semua baris dari baris kedua
+    });
+
+    const rows = response.data.values || [];
+    const allRecords = rows
+      .map((row) => ({
+        employeeId: row[0],
+        employeeName: row[1],
+        date: row[2],
+        checkIn: row[3],
+        checkOut: row[4],
+        status: row[9],
+      }))
+      .filter((rec) => rec.date); // Filter data yang tidak punya tanggal
+
+    return NextResponse.json({ success: true, data: allRecords });
+  } catch (error: any) {
     console.error("API GET Error:", error);
     return NextResponse.json(
-      { success: false, error: "Gagal mengambil data absensi." },
+      { success: false, error: error.message || "Gagal mengambil data." },
       { status: 500 }
     );
   }
@@ -140,7 +164,7 @@ export async function POST(request: NextRequest) {
     if (!spreadsheetId) throw new Error("Google Sheets configuration missing");
 
     const sheets = getGoogleSheetsClient();
-    await initializeHeaders(sheets, spreadsheetId); // ** FUNGSI DIPANGGIL DI SINI **
+    await initializeHeaders(sheets, spreadsheetId);
 
     let result;
     switch (action) {
@@ -163,8 +187,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// --- HANDLER UNTUK SETIAP AKSI ---
-
+// ... (Sisa fungsi handleCheckIn, handleCheckOut, calculateDistance tetap sama)
 function calculateDistance(
   lat1: number,
   lon1: number,

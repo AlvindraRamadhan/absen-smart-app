@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
+import { usePathname } from "next/navigation"; // Import hook untuk mendapatkan path saat ini
+import Link from "next/link"; // Import Link untuk navigasi yang lebih baik
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Menu,
@@ -15,71 +17,71 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-interface HeaderProps {
-  currentPath?: string;
-}
+import { useAppContext } from "@/context/AppContext"; // Import context
 
 const navigationItems = [
-  { href: "/", label: "Dashboard", icon: Home },
+  { href: "/", label: "Home", icon: Home },
   { href: "/attendance", label: "Absensi", icon: Calendar },
-  { href: "/reports", label: "Laporan", icon: BarChart3 },
-  { href: "/settings", label: "Pengaturan", icon: Settings },
+  { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
 ];
 
-export function Header({ currentPath = "/" }: HeaderProps) {
+export function Header() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
 
-  const toggleMobileMenu = () => setIsMobileMenuOpen(!isMobileMenuOpen);
-  const toggleProfileMenu = () => setIsProfileMenuOpen(!isProfileMenuOpen);
+  const currentPath = usePathname();
+  const { user } = useAppContext();
+
+  // ** FUNGSI YANG DIPERBAIKI **
+  const toggleMobileMenu = () => setIsMobileMenuOpen((prev) => !prev);
+  const toggleProfileMenu = () => setIsProfileMenuOpen((prev) => !prev);
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-gray-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/60">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
-          <motion.div
-            className="flex items-center space-x-3"
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.5 }}
-          >
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center">
-              <Calendar className="w-5 h-5 text-white" />
-            </div>
+          <Link href="/" className="flex items-center space-x-3">
+            <motion.div
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.5 }}
+            >
+              <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center">
+                <Calendar className="w-5 h-5 text-white" />
+              </div>
+            </motion.div>
             <h1 className="text-xl font-semibold text-gray-900 hidden sm:block">
               Absen Smart
             </h1>
-          </motion.div>
+          </Link>
 
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center space-x-1">
             {navigationItems.map((item) => {
               const isActive = currentPath === item.href;
               return (
-                <motion.a
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    "flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-200",
-                    isActive
-                      ? "bg-blue-50 text-blue-700 border border-blue-200"
-                      : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
-                  )}
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  <item.icon className="w-4 h-4" />
-                  <span>{item.label}</span>
-                </motion.a>
+                <Link href={item.href} key={item.href}>
+                  <motion.div
+                    className={cn(
+                      "flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-200",
+                      isActive
+                        ? "bg-blue-50 text-blue-700"
+                        : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+                    )}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <item.icon className="w-4 h-4" />
+                    <span>{item.label}</span>
+                  </motion.div>
+                </Link>
               );
             })}
           </nav>
 
           {/* Right Side - Notifications and Profile */}
           <div className="flex items-center space-x-4">
-            {/* Notifications */}
             <motion.button
               className="relative p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors"
               whileHover={{ scale: 1.05 }}
@@ -89,7 +91,6 @@ export function Header({ currentPath = "/" }: HeaderProps) {
               <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
             </motion.button>
 
-            {/* Profile Dropdown */}
             <div className="relative">
               <motion.button
                 onClick={toggleProfileMenu}
@@ -102,7 +103,7 @@ export function Header({ currentPath = "/" }: HeaderProps) {
                 </div>
                 <div className="hidden sm:block text-left">
                   <div className="text-sm font-medium text-gray-900">
-                    John Doe
+                    {user?.name || "User"}
                   </div>
                   <div className="text-xs text-gray-500">Administrator</div>
                 </div>
@@ -114,7 +115,6 @@ export function Header({ currentPath = "/" }: HeaderProps) {
                 />
               </motion.button>
 
-              {/* Profile Dropdown Menu */}
               <AnimatePresence>
                 {isProfileMenuOpen && (
                   <motion.div
@@ -126,37 +126,34 @@ export function Header({ currentPath = "/" }: HeaderProps) {
                   >
                     <div className="px-4 py-3 border-b border-gray-100">
                       <div className="text-sm font-medium text-gray-900">
-                        John Doe
+                        {user?.name || "User"}
                       </div>
                       <div className="text-sm text-gray-500">
-                        john.doe@company.com
+                        {user?.id
+                          ? `${user.id.toLowerCase()}@company.com`
+                          : "email@company.com"}
                       </div>
                     </div>
-
                     <div className="py-1">
-                      <a
-                        href="/profile"
+                      <Link
+                        href="#"
                         className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                       >
                         <User className="w-4 h-4 mr-3" />
                         Profil Saya
-                      </a>
-                      <a
-                        href="/settings"
+                      </Link>
+                      <Link
+                        href="#"
                         className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                       >
                         <Settings className="w-4 h-4 mr-3" />
                         Pengaturan
-                      </a>
+                      </Link>
                     </div>
-
                     <div className="border-t border-gray-100 py-1">
                       <button
                         className="flex items-center w-full px-4 py-2 text-sm text-red-700 hover:bg-red-50"
-                        onClick={() => {
-                          // Handle logout
-                          console.log("Logout clicked");
-                        }}
+                        onClick={() => console.log("Logout clicked")}
                       >
                         <LogOut className="w-4 h-4 mr-3" />
                         Keluar
@@ -167,7 +164,6 @@ export function Header({ currentPath = "/" }: HeaderProps) {
               </AnimatePresence>
             </div>
 
-            {/* Mobile Menu Button */}
             <motion.button
               onClick={toggleMobileMenu}
               className="md:hidden p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors"
@@ -183,7 +179,6 @@ export function Header({ currentPath = "/" }: HeaderProps) {
           </div>
         </div>
 
-        {/* Mobile Navigation */}
         <AnimatePresence>
           {isMobileMenuOpen && (
             <motion.nav
@@ -197,20 +192,20 @@ export function Header({ currentPath = "/" }: HeaderProps) {
                 {navigationItems.map((item) => {
                   const isActive = currentPath === item.href;
                   return (
-                    <a
-                      key={item.href}
+                    <Link
                       href={item.href}
+                      key={item.href}
                       className={cn(
                         "flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-200",
                         isActive
-                          ? "bg-blue-50 text-blue-700 border border-blue-200"
+                          ? "bg-blue-50 text-blue-700"
                           : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
                       )}
                       onClick={() => setIsMobileMenuOpen(false)}
                     >
                       <item.icon className="w-5 h-5" />
                       <span>{item.label}</span>
-                    </a>
+                    </Link>
                   );
                 })}
               </div>
